@@ -36,6 +36,85 @@ const CONTACT_FIELDS = [
   ['contact_note', 'Notes'],
 ];
 
+// Strong overrides fire BEFORE Jaccard — the token unambiguously changes field meaning
+// (e.g. "cell" means mobile, not phone; "dob" means birthdate, not description).
+const FIELD_OVERRIDES_STRONG = {
+  'dob':      'contact_birthdate',
+  'birth':    'contact_birthdate',
+  'cell':     'contact_mobile',
+  'cellular': 'contact_mobile',
+  'mobile':   'contact_mobile',
+  'sex':      'contact_gender',
+};
+
+// Weak overrides fire AFTER Jaccard, only when Jaccard finds no match — synonyms or
+// abbreviations where the word itself is absent from all field names
+// (e.g. "mail" isn't in "email", "address" isn't in "street").
+const FIELD_OVERRIDES_WEAK = {
+  'tel':       'contact_phone',
+  'telephone': 'contact_phone',
+  'mail':      'contact_email',
+  'address':   'contact_street',
+  'addr':      'contact_street',
+  'postal':    'contact_zip',
+  'postcode':  'contact_zip',
+  'notes':     'contact_note',
+  'comments':  'contact_note',
+  'comment':   'contact_note',
+};
+
+// Split on _, -, whitespace, and camelCase boundaries; lowercase; drop single chars.
+function tokenize(str) {
+  return str
+    .split(/[_\-\s]+/)
+    .flatMap(part => part.replace(/([a-z])([A-Z])/g, '$1 $2').split(' '))
+    .map(t => t.toLowerCase())
+    .filter(t => t.length > 1);
+}
+
+// Return the contact field key that best matches a CSV header, or '' if none qualifies.
+function guessField(csvHeader) {
+  const csvTokens = tokenize(csvHeader);
+  if (!csvTokens.length) return '';
+
+  // Strong overrides win immediately — token unambiguously determines the field.
+  for (const t of csvTokens) {
+    if (FIELD_OVERRIDES_STRONG[t]) return FIELD_OVERRIDES_STRONG[t];
+  }
+
+  // Jaccard similarity against all contact field names (minus the 'contact_' prefix).
+  let bestField = '';
+  let bestScore = 0;
+
+  for (const [fieldKey] of CONTACT_FIELDS) {
+    if (fieldKey === 'XID') continue;
+    const fieldTokens = tokenize(fieldKey.replace(/^contact_/, ''));
+    if (!fieldTokens.length) continue;
+
+    const fieldSet = new Set(fieldTokens);
+    let matches = 0;
+    for (const t of csvTokens) {
+      if (fieldSet.has(t)) matches++;
+    }
+
+    const union = new Set([...csvTokens, ...fieldTokens]).size;
+    const score = matches / union;
+    if (score > bestScore) {
+      bestScore = score;
+      bestField = fieldKey;
+    }
+  }
+
+  if (bestScore >= 0.25) return bestField;
+
+  // Weak overrides: synonyms absent from field names — only when Jaccard found nothing.
+  for (const t of csvTokens) {
+    if (FIELD_OVERRIDES_WEAK[t]) return FIELD_OVERRIDES_WEAK[t];
+  }
+
+  return '';
+}
+
 const SCHEMA_DOC = `# Contact Table Schema
 
 This database contains a \`contact\` table with the following columns:
@@ -269,26 +348,6 @@ function showMapper() {
   const { headers, rows } = csvData;
   columnMap = {};
 
-  // Auto-suggest mappings
-  const suggestions = {
-    'first': 'contact_first_name', 'first name': 'contact_first_name', 'firstname': 'contact_first_name',
-    'last': 'contact_last_name', 'last name': 'contact_last_name', 'lastname': 'contact_last_name',
-    'name': 'contact_last_name',
-    'email': 'contact_email', 'e-mail': 'contact_email',
-    'phone': 'contact_phone', 'telephone': 'contact_phone', 'cell': 'contact_mobile', 'mobile': 'contact_mobile',
-    'address': 'contact_street', 'street': 'contact_street',
-    'city': 'contact_city', 'state': 'contact_state', 'zip': 'contact_zip',
-    'zip code': 'contact_zip', 'postal': 'contact_zip',
-    'party': 'contact_party', 'party affiliation': 'contact_party', 'political party': 'contact_party',
-    'district': 'contact_district', 'precinct': 'contact_precinct',
-    'voter id': 'contact_voter_id', 'voterid': 'contact_voter_id',
-    'gender': 'contact_gender', 'sex': 'contact_gender',
-    'note': 'contact_note', 'notes': 'contact_note', 'comment': 'contact_note', 'comments': 'contact_note',
-    'description': 'contact_description',
-    'title': 'contact_title', 'salutation': 'contact_salutation',
-    'dob': 'contact_birthdate', 'birthdate': 'contact_birthdate', 'birth date': 'contact_birthdate',
-  };
-
   const grid = document.getElementById('mapper-grid');
   grid.innerHTML = '';
 
@@ -309,7 +368,7 @@ function showMapper() {
       CONTACT_FIELDS.filter(([k]) => k !== 'XID')
         .map(([k, v]) => `<option value="${k}">${v} (${k})</option>`).join('');
 
-    const suggested = suggestions[hdr.toLowerCase().trim()];
+    const suggested = guessField(hdr);
     if (suggested) sel.value = suggested;
     columnMap[hdr] = sel;
     grid.appendChild(sel);
