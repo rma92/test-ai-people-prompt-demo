@@ -1,0 +1,5 @@
+jobs/
+server/server.db
+*.db
+server/ai-crm-server.exe
+server/ai-crm-server

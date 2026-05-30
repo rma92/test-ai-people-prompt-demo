@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Outreach Campaign Builder</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #222; }
+  header { background: #1a1a2e; color: #fff; padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 1.2rem; font-weight: 600; }
+  #status-bar { font-size: .8rem; margin-left: auto; opacity: .7; }
+
+  main { max-width: 960px; margin: 24px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 20px; }
+
+  section { background: #fff; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+  .sec-header { background: #f0f0f0; border-bottom: 1px solid #ddd; padding: 10px 16px; display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+  .sec-header h2 { font-size: .95rem; font-weight: 600; flex: 1; }
+  .sec-header .badge { font-size: .75rem; background: #1a1a2e; color: #fff; border-radius: 12px; padding: 2px 8px; }
+  .sec-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .sec-body.collapsed { display: none; }
+
+  label { font-size: .85rem; font-weight: 500; display: block; margin-bottom: 4px; }
+  input[type=text], input[type=number], textarea, select {
+    width: 100%; padding: 7px 10px; border: 1px solid #ccc; border-radius: 6px;
+    font-size: .88rem; font-family: inherit;
+  }
+  textarea { resize: vertical; }
+  input[type=number] { width: auto; }
+
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border: none; border-radius: 6px; font-size: .85rem; font-weight: 500; cursor: pointer; transition: opacity .15s; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn-primary { background: #1a1a2e; color: #fff; }
+  .btn-danger { background: #c0392b; color: #fff; }
+  .btn-success { background: #27ae60; color: #fff; }
+  .btn-warning { background: #e67e22; color: #fff; }
+  .btn-secondary { background: #6c757d; color: #fff; }
+  .btn-sm { padding: 4px 10px; font-size: .78rem; }
+
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .row > * { flex: 1; min-width: 120px; }
+  .row > .shrink { flex: 0; }
+
+  /* Drop zone */
+  #drop-zone { border: 2px dashed #aaa; border-radius: 8px; padding: 32px; text-align: center; cursor: pointer; color: #666; transition: background .15s, border-color .15s; }
+  #drop-zone.drag-over { background: #e8f4fd; border-color: #3498db; }
+
+  /* Table */
+  .tbl-wrap { overflow: auto; max-height: 380px; border: 1px solid #ddd; border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: .82rem; }
+  th { background: #f0f0f0; position: sticky; top: 0; z-index: 1; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid #eee; white-space: nowrap; text-align: left; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #fafafa; }
+
+  /* Column mapper */
+  .mapper-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; font-size: .82rem; }
+  .mapper-grid label { margin: 0; font-weight: normal; align-self: center; }
+
+  /* Progress bar */
+  .progress-bar { height: 8px; border-radius: 4px; background: #e0e0e0; overflow: hidden; }
+  .progress-bar-fill { height: 100%; background: #1a1a2e; transition: width .2s; }
+
+  /* Radio/checkbox groups */
+  .radio-group, .check-group { display: flex; flex-direction: column; gap: 6px; }
+  .radio-group label, .check-group label { display: flex; align-items: center; gap: 8px; font-weight: normal; cursor: pointer; }
+  .radio-group input, .check-group input { width: auto; }
+
+  /* Status badge */
+  .badge-status { font-size: .72rem; padding: 2px 8px; border-radius: 10px; font-weight: 600; display: inline-block; }
+  .s-pending { background: #ddd; color: #555; }
+  .s-running { background: #2980b9; color: #fff; }
+  .s-completed { background: #27ae60; color: #fff; }
+  .s-failed { background: #c0392b; color: #fff; }
+  .s-killed { background: #e67e22; color: #fff; }
+
+  /* Preview modal */
+  #preview-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100; align-items: center; justify-content: center; }
+  #preview-modal.open { display: flex; }
+  #preview-box { background: #fff; border-radius: 8px; width: 90%; max-width: 800px; max-height: 85vh; display: flex; flex-direction: column; }
+  #preview-box header { padding: 12px 16px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; }
+  #preview-content { flex: 1; overflow: auto; padding: 16px; font-family: monospace; font-size: .82rem; white-space: pre-wrap; }
+
+  /* Job file list */
+  .file-list { display: flex; flex-direction: column; gap: 4px; }
+  .file-item { display: flex; align-items: center; gap: 8px; font-size: .82rem; }
+  .file-item a { color: #1a6fb5; text-decoration: none; }
+  .file-item a:hover { text-decoration: underline; }
+
+  /* Output viewer */
+  #output-viewer { background: #f8f8f8; border: 1px solid #ddd; border-radius: 6px; padding: 12px; font-size: .82rem; white-space: pre-wrap; max-height: 400px; overflow: auto; font-family: monospace; }
+
+  .info { font-size: .82rem; color: #555; }
+  .err { color: #c0392b; font-size: .82rem; }
+
+  /* Upload progress */
+  #upload-status { font-size: .82rem; color: #555; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Outreach Campaign Builder</h1>
+  <span id="status-bar">Ready</span>
+</header>
+
+<main>
+  <!-- Section 0: Tools -->
+  <section id="sec-tools">
+    <div class="sec-header" onclick="toggleSection('sec-tools')">
+      <h2>0. Tools</h2>
+    </div>
+    <div class="sec-body">
+      <div class="row">
+        <button class="btn btn-warning" onclick="clearDatabases()">Clear All Databases</button>
+        <button class="btn btn-danger" onclick="deleteAllData()">Delete All Data &amp; Reload</button>
+      </div>
+      <p class="info" id="db-info">Loading database…</p>
+    </div>
+  </section>
+
+  <!-- Section 1: Import Data -->
+  <section id="sec-import">
+    <div class="sec-header" onclick="toggleSection('sec-import')">
+      <h2>1. Import Data</h2>
+      <span class="badge" id="contact-count-badge">0 contacts</span>
+    </div>
+    <div class="sec-body">
+      <div id="drop-zone" onclick="document.getElementById('csv-input').click()">
+        <p>Drag &amp; drop a CSV file here, or click to browse</p>
+        <input type="file" id="csv-input" accept=".csv" style="display:none">
+      </div>
+
+      <div id="csv-preview" style="display:none">
+        <h3 style="font-size:.88rem;margin-bottom:8px">Column Mapping</h3>
+        <div class="radio-group" style="flex-direction:row;gap:16px;margin-bottom:8px">
+          <label><input type="radio" name="import-mode" value="replace" checked> Replace existing</label>
+          <label><input type="radio" name="import-mode" value="append"> Append</label>
+          <label><input type="radio" name="import-mode" value="notes"> Append notes only</label>
+        </div>
+        <div class="mapper-grid" id="mapper-grid"></div>
+        <div style="margin-top:10px">
+          <h3 style="font-size:.88rem;margin-bottom:6px">Preview (first 3 rows)</h3>
+          <div class="tbl-wrap" id="csv-preview-table"></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn btn-primary" id="import-btn" onclick="importCSV()">Import</button>
+          <button class="btn btn-secondary" onclick="cancelImport()">Cancel</button>
+        </div>
+        <div class="progress-bar" id="import-progress-wrap" style="display:none">
+          <div class="progress-bar-fill" id="import-progress-fill" style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 2: Select Contacts -->
+  <section id="sec-contacts">
+    <div class="sec-header" onclick="toggleSection('sec-contacts')">
+      <h2>2. Select Contacts</h2>
+      <span class="badge" id="selected-count-badge">none selected</span>
+    </div>
+    <div class="sec-body">
+      <label>SQL Query</label>
+      <textarea id="sql-query" rows="3">SELECT XID, contact_first_name, contact_last_name, contact_email, contact_phone, contact_party, contact_district FROM contact WHERE contact_is_deleted=0</textarea>
+      <div class="row">
+        <button class="btn btn-primary shrink" onclick="runQuery()">Run Query</button>
+        <span class="info" id="query-count"></span>
+      </div>
+      <div class="tbl-wrap" id="query-results" style="display:none"></div>
+      <button class="btn btn-success" id="use-contacts-btn" style="display:none" onclick="useContacts()">Use These Contacts for Campaign</button>
+    </div>
+  </section>
+
+  <!-- Section 3: First Question -->
+  <section id="sec-question">
+    <div class="sec-header" onclick="toggleSection('sec-question')">
+      <h2>3. First Question</h2>
+    </div>
+    <div class="sec-body">
+      <div class="radio-group" style="flex-direction:row;gap:20px">
+        <label><input type="radio" name="dimension" value="What" checked> <strong>What?</strong> — I know the topic</label>
+        <label><input type="radio" name="dimension" value="Who"> <strong>Who?</strong> — I know the audience</label>
+        <label><input type="radio" name="dimension" value="When"> <strong>When?</strong> — I know the timing</label>
+      </div>
+      <label>Describe your campaign goal / topic</label>
+      <textarea id="campaign-goal" rows="3">School Choice</textarea>
+    </div>
+  </section>
+
+  <!-- Section 4: Additional Notes -->
+  <section id="sec-notes">
+    <div class="sec-header" onclick="toggleSection('sec-notes')">
+      <h2>4. Additional Notes &amp; Options</h2>
+    </div>
+    <div class="sec-body">
+      <label>Additional context for the AI</label>
+      <textarea id="extra-notes" rows="3" placeholder="e.g. Focus on parents with school-age children. Avoid mentioning gun statistics directly."></textarea>
+
+      <label>Message count</label>
+      <div class="radio-group">
+        <label><input type="radio" name="msg-mode" value="single" checked> Single message for everyone</label>
+        <label><input type="radio" name="msg-mode" value="max"> Maximum <input type="number" id="max-msgs" value="5" min="2" max="100" style="width:60px"> different messages</label>
+        <label><input type="radio" name="msg-mode" value="unique"> Unique message per recipient</label>
+      </div>
+
+      <label>Coverage</label>
+      <div class="check-group">
+        <label><input type="checkbox" id="contact-all"> Contact all users including those that would be a poor fit (if unchecked, AI may exclude poor-fit recipients)</label>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 5: Prompt AI -->
+  <section id="sec-prompt">
+    <div class="sec-header" onclick="toggleSection('sec-prompt')">
+      <h2>5. Prompt the AI</h2>
+    </div>
+    <div class="sec-body">
+      <p class="info" id="campaign-summary">Configure sections 2–4 first, then generate a job package here.</p>
+      <div class="row">
+        <button class="btn btn-secondary shrink" onclick="previewInstructions()">Preview instructions.md</button>
+        <button class="btn btn-primary shrink" onclick="downloadPackage()">Download Package (ZIP)</button>
+        <button class="btn btn-success shrink" id="upload-btn" onclick="uploadAndCreateJob()">Upload to Server &amp; Create Job</button>
+      </div>
+      <p id="upload-status"></p>
+    </div>
+  </section>
+
+  <!-- Section 6: Job Monitor -->
+  <section id="sec-jobs">
+    <div class="sec-header" onclick="toggleSection('sec-jobs')">
+      <h2>6. Job Monitor</h2>
+      <span class="badge" id="jobs-badge">—</span>
+    </div>
+    <div class="sec-body">
+      <div class="row">
+        <button class="btn btn-secondary shrink" onclick="loadJobs()">Refresh</button>
+        <label style="display:flex;align-items:center;gap:6px;font-weight:normal">
+          <input type="checkbox" id="auto-poll" checked> Auto-poll every 3s
+        </label>
+      </div>
+      <div id="jobs-table"></div>
+    </div>
+  </section>
+</main>
+
+<!-- Preview modal -->
+<div id="preview-modal">
+  <div id="preview-box">
+    <header>
+      <strong id="preview-title">instructions.md</strong>
+      <button class="btn btn-secondary btn-sm" onclick="closePreview()">Close</button>
+    </header>
+    <div id="preview-content"></div>
+  </div>
+</div>
+
+<script src="lib/sql-wasm.js"></script>
+<script src="lib/papaparse.min.js"></script>
+<script src="lib/jszip.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
