@@ -160,14 +160,17 @@
       <span class="badge" id="selected-count-badge">none selected</span>
     </div>
     <div class="sec-body">
-      <label>SQL Query</label>
+      <label>SQL Query <span class="info" style="font-weight:normal">(Ctrl+↑/↓ for history)</span></label>
       <textarea id="sql-query" rows="3">SELECT XID, contact_first_name, contact_last_name, contact_email, contact_phone, contact_party, contact_district FROM contact WHERE contact_is_deleted=0</textarea>
       <div class="row">
         <button class="btn btn-primary shrink" onclick="runQuery()">Run Query</button>
         <span class="info" id="query-count"></span>
       </div>
       <div class="tbl-wrap" id="query-results" style="display:none"></div>
-      <button class="btn btn-success" id="use-contacts-btn" style="display:none" onclick="useContacts()">Use These Contacts for Campaign</button>
+      <div class="row">
+        <button class="btn btn-success shrink" id="use-contacts-btn" style="display:none" onclick="useContacts()">Use These Contacts for Campaign</button>
+        <button class="btn btn-secondary shrink" id="download-csv-btn" style="display:none" onclick="downloadQueryCSV()">Download CSV</button>
+      </div>
     </div>
   </section>
 

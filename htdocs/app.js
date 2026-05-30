@@ -157,11 +157,18 @@ All contacts in contacts.db have contact_is_deleted = 0.
 let SQL = null;
 let db = null;
 let csvData = null;       // { headers, rows } from PapaParse
-let columnMap = {};       // csvHeader -> contactField
+let columnMap = {};       // csvHeader -> <select> element
 let selectedContactIds = []; // XIDs from query result
 let lastQuerySQL = '';
+let lastQueryColumns = []; // column names from last successful query
 let pollTimer = null;
 let currentJobId = null;
+let followTimer = null;   // setInterval handle for live log polling
+let followJobId = null;   // which job is currently being followed
+
+const SQL_HISTORY_KEY = 'sql_history';
+let sqlHistory = JSON.parse(localStorage.getItem(SQL_HISTORY_KEY) || '[]');
+let historyIdx = -1;      // -1 = not browsing history
 
 // ============================================================
 // IndexedDB helpers
@@ -370,9 +377,12 @@ function showMapper() {
 
     const suggested = guessField(hdr);
     if (suggested) sel.value = suggested;
+    sel.addEventListener('change', checkDuplicateMappings);
     columnMap[hdr] = sel;
     grid.appendChild(sel);
   }
+
+  checkDuplicateMappings();
 
   // CSV preview table
   const previewRows = rows.slice(0, 3);
@@ -383,6 +393,32 @@ function showMapper() {
   tbl += '</tbody></table>';
   document.getElementById('csv-preview-table').innerHTML = tbl;
   document.getElementById('csv-preview').style.display = 'block';
+}
+
+function checkDuplicateMappings() {
+  const counts = {};
+  for (const sel of Object.values(columnMap)) {
+    const v = sel.value;
+    if (!v) continue;
+    counts[v] = (counts[v] || 0) + 1;
+  }
+  for (const sel of Object.values(columnMap)) {
+    const v = sel.value;
+    const isDup = v && counts[v] > 1;
+    sel.style.background = isDup ? '#fff3cd' : '';
+    sel.title = isDup ? `Warning: multiple columns mapped to ${v}` : '';
+  }
+  let warn = document.getElementById('dup-warning');
+  if (!warn) {
+    warn = document.createElement('p');
+    warn.id = 'dup-warning';
+    warn.style.cssText = 'color:#856404;background:#fff3cd;padding:6px 10px;border-radius:4px;font-size:.82rem;margin-top:6px';
+    document.getElementById('mapper-grid').after(warn);
+  }
+  const dups = Object.entries(counts).filter(([, n]) => n > 1).map(([k]) => k);
+  warn.textContent = dups.length
+    ? `Multiple CSV columns map to the same field: ${dups.map(k => CONTACT_FIELDS.find(([f]) => f === k)?.[1] || k).join(', ')}`
+    : '';
 }
 
 function cancelImport() {
@@ -467,12 +503,19 @@ function runQuery() {
       document.getElementById('query-results').style.display = 'none';
       document.getElementById('query-count').textContent = '0 rows';
       document.getElementById('use-contacts-btn').style.display = 'none';
-      queryResults = [];
+      document.getElementById('download-csv-btn').style.display = 'none';
+      queryResults = []; lastQueryColumns = [];
       return;
     }
     const { columns, values } = result[0];
     queryResults = values;
+    lastQueryColumns = columns;
     lastQuerySQL = sql;
+
+    // Save to history (deduplicate, most recent first, max 50)
+    sqlHistory = [sql, ...sqlHistory.filter(q => q !== sql)].slice(0, 50);
+    localStorage.setItem(SQL_HISTORY_KEY, JSON.stringify(sqlHistory));
+    historyIdx = -1;
 
     let tbl = `<table><thead><tr>${columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>`;
     const shown = values.slice(0, 1000);
@@ -488,12 +531,48 @@ function runQuery() {
     document.getElementById('query-count').textContent =
       `${total.toLocaleString()} row${total !== 1 ? 's' : ''}${total > 1000 ? ' (showing first 1000)' : ''}`;
     document.getElementById('use-contacts-btn').style.display = 'inline-flex';
+    document.getElementById('download-csv-btn').style.display = 'inline-flex';
   } catch (e) {
     document.getElementById('query-count').innerHTML = `<span class="err">${esc(e.message)}</span>`;
     document.getElementById('query-results').style.display = 'none';
     document.getElementById('use-contacts-btn').style.display = 'none';
+    document.getElementById('download-csv-btn').style.display = 'none';
   }
 }
+
+function downloadQueryCSV() {
+  if (!queryResults.length) return;
+  const csvEscVal = v => {
+    const s = String(v ?? '');
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [
+    lastQueryColumns.map(csvEscVal).join(','),
+    ...queryResults.map(row => row.map(csvEscVal).join(',')),
+  ];
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'query-results.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Query history navigation — Ctrl+Up = older, Ctrl+Down = newer
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('sql-query').addEventListener('keydown', e => {
+    if (!e.ctrlKey) return;
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!sqlHistory.length) return;
+      historyIdx = Math.min(historyIdx + 1, sqlHistory.length - 1);
+      document.getElementById('sql-query').value = sqlHistory[historyIdx];
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (historyIdx <= 0) { historyIdx = -1; document.getElementById('sql-query').value = ''; return; }
+      historyIdx--;
+      document.getElementById('sql-query').value = sqlHistory[historyIdx];
+    }
+  });
+});
 
 function useContacts() {
   // Try to find XID column
@@ -624,38 +703,44 @@ A JSON file with this structure:
 }
 
 function buildRunBat(claudePrompt) {
+  const ep = claudePrompt.replace(/"/g, '\\"');
   return `@echo off
 REM ============================================================
-REM  AI Campaign Runner — Windows
-REM  Run this file from its directory.
-REM  Uncomment ONE command below.
+REM  AI Campaign Runner - Windows
+REM  When started by the server: stdout/stderr are captured to
+REM  job.log automatically. Do NOT add a redirect here.
+REM  When run manually: output appears on screen in real time.
+REM  Uncomment ONE AI command below.
 REM ============================================================
 
-REM Option 1: Claude Code (claude.exe must be in PATH)
-claude --dangerously-skip-permissions -p "${claudePrompt.replace(/"/g, '\\"')}" > job.log 2>&1
+REM Option 1: Claude Code (claude must be in PATH)
+claude --dangerously-skip-permissions -p "${ep}"
 
 REM Option 2: OpenAI Codex (codex must be in PATH)
-REM codex --full-auto "${claudePrompt.replace(/"/g, '\\"')}" > job.log 2>&1
+REM codex --full-auto "${ep}"
 
-echo Done. Exit code: %ERRORLEVEL%
+exit /b %ERRORLEVEL%
 `;
 }
 
 function buildRunSh(claudePrompt) {
+  const ep = claudePrompt.replace(/"/g, '\\"');
   return `#!/usr/bin/env bash
 # ============================================================
-#  AI Campaign Runner — Unix/WSL/macOS
-#  Run: bash run.sh
-#  Uncomment ONE command below.
+#  AI Campaign Runner - Unix/WSL/macOS
+#  When started by the server: stdout/stderr are captured to
+#  job.log automatically. Do NOT add a redirect here.
+#  When run manually: output appears on screen in real time.
+#  Uncomment ONE AI command below.
 # ============================================================
 
 # Option 1: Claude Code
-claude --dangerously-skip-permissions -p "${claudePrompt.replace(/"/g, '\\"')}" > job.log 2>&1
+claude --dangerously-skip-permissions -p "${ep}"
 
 # Option 2: OpenAI Codex
-# codex --full-auto "${claudePrompt.replace(/"/g, '\\"')}" > job.log 2>&1
+# codex --full-auto "${ep}"
 
-echo "Done. Exit code: $?"
+exit $?
 `;
 }
 
@@ -669,6 +754,33 @@ function previewInstructions() {
 
 function closePreview() {
   document.getElementById('preview-modal').classList.remove('open');
+  if (followTimer) { clearInterval(followTimer); followTimer = null; followJobId = null; }
+}
+
+async function fetchLog(jobId) {
+  const res = await fetch(`${API}/api/jobs/${jobId}/log`);
+  return res.ok ? res.text() : '';
+}
+
+function tailLines(text, n = 200) {
+  const lines = text.split('\n');
+  return lines.slice(-n).join('\n');
+}
+
+async function followLog(jobId) {
+  followJobId = jobId;
+  document.getElementById('preview-title').textContent = `job.log — Job #${jobId} (live)`;
+  document.getElementById('preview-modal').classList.add('open');
+
+  const content = document.getElementById('preview-content');
+  const refresh = async () => {
+    const text = await fetchLog(jobId);
+    content.textContent = tailLines(text);
+    content.scrollTop = content.scrollHeight;
+  };
+  await refresh();
+  if (followTimer) clearInterval(followTimer);
+  followTimer = setInterval(refresh, 2000);
 }
 
 async function buildContactsDB() {
@@ -815,6 +927,7 @@ function renderJobs(jobs) {
       <td style="display:flex;gap:4px;flex-wrap:wrap">
         ${j.status === 'pending' ? `<button class="btn btn-success btn-sm" onclick="startJob(${j.id})">Start</button>` : ''}
         ${j.status === 'running' ? `<button class="btn btn-danger btn-sm" onclick="killJob(${j.id})">Kill</button>` : ''}
+        ${j.status !== 'pending' ? `<button class="btn btn-primary btn-sm" onclick="followLog(${j.id})">${j.status === 'running' ? '⟳ Follow Log' : 'View Log'}</button>` : ''}
         <button class="btn btn-secondary btn-sm" onclick="showJobFiles(${j.id})">Files</button>
       </td>
     </tr>

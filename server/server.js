@@ -123,21 +123,26 @@ function indexOfBuf(haystack, needle, start = 0) {
 // --- Job management ---
 function startJob(id, jobPath) {
   const logPath = path.join(jobPath, 'job.log');
-  const logFd = fs.openSync(logPath, 'a');
+  // Use a write stream so stdout/stderr flow into job.log in real time.
+  // The run script itself has no redirect, so manual runs still print to the terminal.
+  const logStream = fs.createWriteStream(logPath, { flags: 'a' });
 
   const isWin = process.platform === 'win32';
   let child;
   if (isWin) {
     child = spawn('cmd.exe', ['/c', 'run.bat'], {
-      cwd: jobPath, stdio: ['ignore', logFd, logFd],
+      cwd: jobPath, stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
     });
   } else {
     child = spawn('bash', ['run.sh'], {
-      cwd: jobPath, stdio: ['ignore', logFd, logFd],
+      cwd: jobPath, stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });
   }
+
+  child.stdout.pipe(logStream);
+  child.stderr.pipe(logStream);
 
   const pid = child.pid;
   const now = nowISO();
@@ -145,7 +150,7 @@ function startJob(id, jobPath) {
   processes.set(id, child);
 
   child.on('close', (code) => {
-    fs.closeSync(logFd);
+    logStream.end();
     processes.delete(id);
     const finish = nowISO();
     const status = code === 0 ? 'completed' : 'failed';
@@ -230,6 +235,22 @@ const server = http.createServer(async (req, res) => {
       if (job.status !== 'pending') return errRes(res, 400, 'job is not pending');
       try { startJob(id, jobPath); } catch (e) { return errRes(res, 500, e.message); }
       return jsonRes(res, { status: 'running' });
+    }
+
+    // /api/jobs/{id}/log  — last ~50 KB of job.log for live progress monitoring
+    if (sub === 'log') {
+      if (req.method !== 'GET') return errRes(res, 405, 'method not allowed');
+      const logPath = path.join(jobPath, 'job.log');
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      if (!fs.existsSync(logPath)) return res.end('');
+      const TAIL = 50000;
+      const stat = fs.statSync(logPath);
+      const start = Math.max(0, stat.size - TAIL);
+      const buf = Buffer.alloc(stat.size - start);
+      const fd = fs.openSync(logPath, 'r');
+      fs.readSync(fd, buf, 0, buf.length, start);
+      fs.closeSync(fd);
+      return res.end(buf);
     }
 
     // /api/jobs/{id}/files
